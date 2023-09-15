@@ -90,7 +90,19 @@ class DownProjectBlock(nn.Module):
         super().__init__()
         ### YOUR CODE HERE
         ### Hint: Copy over the code from Block and make necessary modifications.
-        pass
+        # Define the rest of the block components
+        # Initialize the learnable parameter C
+        self.C = nn.Parameter(nn.init.xavier_uniform_(torch.empty(1, config.bottleneck_dim, config.n_embd)))
+
+        self.ln1 = nn.LayerNorm(config.n_embd)
+        self.ln2 = nn.LayerNorm(config.n_embd)
+        self.attn = attention.CausalCrossAttention(config)
+        self.mlp = nn.Sequential(
+            nn.Linear(config.n_embd, 4 * config.n_embd),
+            nn.GELU(),
+            nn.Linear(4 * config.n_embd, config.n_embd),
+            nn.Dropout(config.resid_pdrop),
+        )
         ### END YOUR CODE
 
     def forward(self, x_input):
@@ -100,7 +112,12 @@ class DownProjectBlock(nn.Module):
         ### YOUR CODE HERE
         ### Hint: Copy over the code from Block and make necessary modifications.
         ### Should be around 3-5 lines.
-        pass
+        # Perform cross-attention between x_input and self.C
+        x_kv = self.ln1(self.C)  # Set the learnable parameter as keys and values
+        x_q = self.ln1(x_input)  # x_input as query
+        x_input = self.attn(x_q, x_kv)  # Cross-attention
+        x_input = x_input + self.mlp(self.ln2(x_input))
+        return x_input
         ### END YOUR CODE
     
     
@@ -115,7 +132,16 @@ class UpProjectBlock(nn.Module):
         super().__init__()
         ### YOUR CODE HERE
         ### Hint: Copy over the code from Block and make necessary modifications.
-        pass
+        # Define the block components
+        self.ln1 = nn.LayerNorm(config.n_embd)
+        self.ln2 = nn.LayerNorm(config.n_embd)
+        self.attn = attention.CausalCrossAttention(config)
+        self.mlp = nn.Sequential(
+            nn.Linear(config.n_embd, 4 * config.n_embd),
+            nn.GELU(),
+            nn.Linear(4 * config.n_embd, config.n_embd),
+            nn.Dropout(config.resid_pdrop),
+        )
         ### END YOUR CODE
     
     def forward(self, y, x_input):
@@ -126,7 +152,12 @@ class UpProjectBlock(nn.Module):
         ### YOUR CODE HERE
         ### Hint: Copy over the code from Block and make necessary modifications.
         ### Should be around 3-5 lines.
-        pass
+        # Perform cross-attention between previous layer's output y and x_input
+        x_kv = x_input  # x_input as keys and values
+        x_q = self.ln1(y)  # Output of the previous layer as query
+        x_input = self.attn(x_q, x_kv)  # Cross-attention
+        x_input = x_input + self.mlp(self.ln2(x_input))
+        return x_input
         ### END YOUR CODE
     
 

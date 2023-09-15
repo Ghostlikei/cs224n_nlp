@@ -168,7 +168,48 @@ class CharCorruptionDataset(Dataset):
 
     def __getitem__(self, idx):
         # TODO [part e]: see spec above
-        raise NotImplementedError
+        # raise NotImplementedError
+
+        # Retrieve the element of self.data at the given index
+        doc = self.data[idx]
+        # print("Len doc: ", len(doc))
+
+        # Randomly truncate the document length
+        min_length = 4
+        max_length = int(self.block_size * 7 / 8)
+        length = random.randint(min_length, max_length)
+        doc = doc[:length]
+        truncated_len = len(doc)
+
+        # Randomly determine the length of the masked content
+        masked_len = random.randint(0, truncated_len // 2)
+        cut_idx = random.randint(0, masked_len)
+
+        # Split the document into prefix, masked_content, and suffix
+        prefix = doc[:cut_idx]
+        masked_content = doc[cut_idx:cut_idx+masked_len]
+        suffix = doc[cut_idx+masked_len:]
+
+        # print(f"Len prefix: {len(prefix)}")
+        # print(f"Len masked_content: {len(masked_content)}")
+        # print(f"Len suffix: {len(suffix)}")
+        # print(f"Block size: {self.block_size}")
+
+        # Create the masked string
+        masked_string = f"{prefix}{self.MASK_CHAR}{suffix}{self.MASK_CHAR}{masked_content}"
+        masked_string += f"{self.PAD_CHAR * (self.block_size - len(masked_string))}"
+
+        # Create input and output sequences
+        x = masked_string[:-1]
+        y = masked_string[1:]
+
+        # Encode as Long tensors
+        x = torch.tensor([self.stoi[c] for c in x], dtype=torch.long)
+        y = torch.tensor([self.stoi[c] for c in y], dtype=torch.long)
+
+        # print(f"Len of x: ", x.shape)
+
+        return x, y
 
 """
 Code under here is strictly for your debugging purposes; feel free to modify

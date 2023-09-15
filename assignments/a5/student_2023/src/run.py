@@ -7,6 +7,7 @@ from torch.utils.tensorboard import SummaryWriter
 import random
 import argparse
 random.seed(0)
+from dataset import NameDataset
 
 import dataset
 import model
@@ -66,15 +67,19 @@ Don't change above here; write your code below
 if args.variant == 'vanilla':
     # pass # [part c] Make some model here
     # Initialize the model configuration
-    mconf = model.GPTConfig(pretrain_dataset.vocab_size, pretrain_dataset.block_size,
-        n_layer=4, n_head=8, n_embd=256)
     
     # Create the model
     model = model.GPT(mconf)
     model.to(device)  # Move the model to the appropriate device (GPU or CPU)
 elif args.variant == 'perceiver':
     # set mconf.perceiver, and mconf.bottleneck_dim parameters appropriately.
-    pass # [part g] Make some other model here
+    # [part g] Make some other model here
+    mconf.perceiver = True
+    mconf.bottleneck_dim = args.bottleneck_dim
+    print("Bottleneck dim: ", mconf.bottleneck_dim)
+    model = model.GPT(mconf)
+    model.to(device)
+
 else:
     raise ValueError("Unknown model variant")
 
@@ -91,15 +96,27 @@ if args.function == 'pretrain':
     
     # - Make sure to use the following hyperparameters for pretraining:
     # Hyperparameters for pretraining:
-    # max_epochs=650
-    # batch_size=128
-    # learning_rate=args.pretrain_lr
-    # lr_decay=True
-    # warmup_tokens=512*20
-    # final_tokens=200*len(pretrain_dataset)*block_size
-    # num_workers=4
-    # writer=writer 
-    raise NotImplementedError
+    max_epochs=650
+    batch_size=256
+    learning_rate=args.pretrain_lr
+    lr_decay=True
+    warmup_tokens=512*20
+    final_tokens=200*len(pretrain_dataset)*block_size
+    num_workers=4 if torch.cuda.is_available() else 0
+    writer=writer
+
+    tconf = trainer.TrainerConfig(max_epochs=max_epochs,
+                          batch_size=batch_size,
+                          learning_rate=learning_rate,
+                          lr_decay=lr_decay,
+                          warmup_tokens=warmup_tokens,
+                          final_tokens=final_tokens,
+                          num_workers=num_workers)
+    nd_pretrainer = trainer.Trainer(model, pretrain_dataset, None, tconf)
+    nd_pretrainer.train()
+
+    torch.save(model.state_dict(), args.writing_params_path)
+    # raise NotImplementedError
 elif args.function == 'finetune':
     assert args.writing_params_path is not None
     assert args.finetune_corpus_path is not None
@@ -117,75 +134,58 @@ elif args.function == 'finetune':
     # - Make sure to use the following hyperparameters:
     #     [part d] Hyperparameters for finetuning WITHOUT a pretrained model:
     # Load your birthplace prediction dataset using the NameDataset class
-    finetune_dataset = dataset.NameDataset(pretrain_dataset, open(args.finetune_corpus_path, encoding='utf-8').read())
+    if args.reading_params_path is None:
+        finetune_corpus = open(args.finetune_corpus_path, encoding='utf-8').read()
+        finetune_dataset = dataset.NameDataset(pretrain_dataset, finetune_corpus)
 
-    max_epochs=75
-    batch_size=64
-    learning_rate=args.finetune_lr
-    lr_decay=True
-    warmup_tokens=512*20
-    final_tokens=200*len(pretrain_dataset)*block_size
-    num_workers=4
-    writer=writer
+        max_epochs=75
+        batch_size=64
+        learning_rate=args.finetune_lr
+        lr_decay=True
+        warmup_tokens=512*20
+        final_tokens=200*len(pretrain_dataset)*block_size
+        num_workers= 4 if torch.cuda.is_available() else 0
+        writer=writer
+    else:
+        model.load_state_dict(torch.load(args.reading_params_path))
+        finetune_corpus = open(args.finetune_corpus_path, encoding='utf-8').read()
+        finetune_dataset = dataset.NameDataset(pretrain_dataset, finetune_corpus)
 
-    # Define a DataLoader for your dataset
-    dataloader = torch.utils.data.DataLoader(finetune_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+        max_epochs=10
+        batch_size=64
+        learning_rate=args.finetune_lr
+        lr_decay=True
+        warmup_tokens=512*20
+        final_tokens=200*len(pretrain_dataset)*block_size
+        num_workers=4 if torch.cuda.is_available() else 0
+        writer=writer
 
-    # Define an optimizer (e.g., Adam) and a learning rate scheduler
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer, lambda step: min(step / warmup_tokens, 1.0)
-    )
+    if args.eval_corpus_path is not None:
+        # Init the name dataset from corpus for evaluation
+        eval_corpus = open(args.eval_corpus_path).read()
+        eval_dataset = dataset.NameDataset(pretrain_dataset, eval_corpus)
+    else:
+        # If not provided
+        eval_dataset = None
 
-    # Define your loss function (e.g., CrossEntropyLoss)
-    loss_fn = nn.CrossEntropyLoss()
+    tconf = trainer.TrainerConfig(max_epochs=max_epochs,
+                        batch_size=batch_size,
+                        learning_rate=learning_rate,
+                        lr_decay=lr_decay,
+                        warmup_tokens=warmup_tokens,
+                        final_tokens=final_tokens,
+                        num_workers=num_workers)
+    nd_trainer = trainer.Trainer(model, finetune_dataset, eval_dataset, tconf)
+    nd_trainer.train()
 
-    # Fine-tuning loop
-    for epoch in range(max_epochs):
-        model.train()
-        total_loss = 0
-
-        for batch in dataloader:
-            inputs, targets = batch
-            inputs, targets = inputs.to(device), targets.to(device)
-
-            # Zero the gradients
-            optimizer.zero_grad()
-
-            # Forward pass
-            outputs = model(inputs)
-
-            # Compute the loss
-            loss = loss_fn(outputs.view(-1, pretrain_dataset.vocab_size), targets.view(-1))
-
-            # Backpropagation
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
-
-            total_loss += loss.item()
-
-        # Calculate the average loss for this epoch
-        average_loss = total_loss / len(dataloader)
-
-        # Print or log the average loss for this epoch
-        print(f'Epoch [{epoch+1}/{max_epochs}] - Loss: {average_loss:.4f}')
-
-    # Save the model parameters after fine-tuning
     torch.save(model.state_dict(), args.writing_params_path)
+
+    
     #     [part f] Hyperparameters for finetuning WITH a pretrained model:
-    #         max_epochs=10
-    #         batch_size=256
-    #         learning_rate=args.finetune_lr
-    #         lr_decay=True
-    #         warmup_tokens=512*20
-    #         final_tokens=200*len(pretrain_dataset)*block_size
-    #         num_workers=4
-    #         writer=writer
     #     You can use the args.reading_params_path flag to switch between the
     #     number of epochs for each case.
      
-    raise NotImplementedError
+    # raise NotImplementedError
 elif args.function == 'evaluate':
     assert args.outputs_path is not None
     assert args.reading_params_path is not None
